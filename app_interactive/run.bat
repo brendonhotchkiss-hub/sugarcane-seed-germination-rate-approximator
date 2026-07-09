@@ -1,14 +1,28 @@
 @echo off
-echo Starting Sugarcane Germination Analyzer (Interactive)...
-echo.
-echo When ready, open your browser and go to:
-echo   http://localhost:5000
-echo.
-echo To stop the app, close this window or press Ctrl+C.
+echo Sugarcane Germination Analyzer (Interactive)
+echo =============================================
 echo.
 
 cd /d "%~dp0"
-call ..\venv\Scripts\activate
+
+:: Create venv if it doesn't exist
+if not exist "venv\" (
+    echo Setting up virtual environment for the first time...
+    py -3.12 -m venv venv
+    call venv\Scripts\activate
+    echo Installing dependencies...
+    pip install -r requirements.txt
+    echo Setup complete.
+    echo.
+) else (
+    call venv\Scripts\activate
+)
+
+echo Starting app...
+echo Your browser will open automatically at http://localhost:5000
+echo To stop the app, press Ctrl+C or close this window.
+echo.
+
 python server.py
 
 pause

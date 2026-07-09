@@ -3,6 +3,7 @@ server.py
 ---------
 Flask backend for the interactive sugarcane germination analyzer.
 Handles image upload, pipeline execution, and correction state management.
+Includes QR code reading for petri dish ID.
 """
 
 import base64
@@ -23,33 +24,26 @@ from germination_pipeline import (
     clean_mask,
     watershed_separate,
     annotate_and_count,
+    read_qr_code,
 )
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
-# ── Load model once at startup ────────────────────────────────────
 print("Loading SVM model...")
 SVM, SCALER = load_model()
 print("Model loaded.")
 
-# ── In-memory session store ───────────────────────────────────────
 IMAGE_STORE = {}
 
 
-# ── Helpers ───────────────────────────────────────────────────────
 def img_to_b64(img_rgb):
-    """Convert RGB numpy array to base64 PNG string for sending to browser."""
     img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
     _, buffer = cv2.imencode(".png", img_bgr)
     return base64.b64encode(buffer).decode("utf-8")
 
 
 def compute_corrected_counts(name):
-    """
-    Derive corrected total and germinated counts from model predictions
-    and user corrections for a given image.
-    """
     entry = IMAGE_STORE[name]
     model_total      = entry["model_total"]
     model_germinated = entry["model_germinated"]
@@ -72,7 +66,6 @@ def compute_corrected_counts(name):
     return corrected_total, corrected_germinated, corrected_rate
 
 
-# ── Routes ────────────────────────────────────────────────────────
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -80,10 +73,6 @@ def index():
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    """
-    Accept one or more uploaded images, run the pipeline on each,
-    and return annotated images + model predictions as JSON.
-    """
     files = request.files.getlist("images")
     if not files:
         return jsonify({"error": "No files uploaded"}), 400
@@ -98,6 +87,9 @@ def upload():
             tmp_path = tmp.name
 
         try:
+            # Read QR code before cropping
+            petri_id = read_qr_code(tmp_path)
+
             img         = preprocess(tmp_path)
             combined, _ = hsv_segment(img)
             cleaned     = clean_mask(combined)
@@ -110,6 +102,7 @@ def upload():
             rate = round(germinated / total * 100, 1) if total > 0 else 0.0
 
             IMAGE_STORE[original_name] = {
+                "petri_id"         : petri_id,
                 "model_total"      : total,
                 "model_germinated" : germinated,
                 "model_rate"       : rate,
@@ -119,6 +112,7 @@ def upload():
 
             results.append({
                 "name"                 : original_name,
+                "petri_id"             : petri_id,
                 "model_total"          : total,
                 "model_germinated"     : germinated,
                 "model_rate"           : rate,
@@ -138,9 +132,6 @@ def upload():
 
 @app.route("/correct", methods=["POST"])
 def correct():
-    """
-    Receive a correction event from the frontend and update the store.
-    """
     data = request.get_json()
     name = data.get("name")
 
@@ -177,11 +168,11 @@ def correct():
 
 @app.route("/export", methods=["GET"])
 def export():
-    """Return all results (model + corrected) as JSON for CSV download."""
     rows = []
     for name, entry in IMAGE_STORE.items():
         ct, cg, cr = compute_corrected_counts(name)
         rows.append({
+            "Petri ID"             : entry["petri_id"],
             "Image"                : name,
             "Model Total"          : entry["model_total"],
             "Model Germinated"     : entry["model_germinated"],
@@ -193,7 +184,6 @@ def export():
     return jsonify(rows)
 
 
-# ── Entry Point ───────────────────────────────────────────────────
 def open_browser():
     webbrowser.open("http://localhost:5000")
 

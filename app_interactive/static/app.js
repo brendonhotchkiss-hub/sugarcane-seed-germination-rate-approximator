@@ -92,6 +92,7 @@ function renderImageList() {
         div.dataset.name = r.name;
         const nCorr = (state.corrections[r.name] || []).length;
         div.innerHTML = `
+            <div class="img-name">${r.petri_id !== "Unknown" ? r.petri_id + " — " : ""}${r.name}</div>
             <div class="img-name">${r.name}</div>
             <div class="img-stats">Model: ${r.model_total} / ${r.model_germinated} / ${r.model_rate}%</div>
             <div class="img-stats">
@@ -309,6 +310,7 @@ function renderResultsTable() {
         const tr = document.createElement("tr");
         if (r.name === state.active) tr.classList.add("active-row");
         tr.innerHTML = `
+            <td>${r.petri_id}</td>
             <td>${r.name}</td>
             <td class="model-val">${r.model_total}</td>
             <td class="model-val">${r.model_germinated}</td>

@@ -7,25 +7,20 @@ from datetime import datetime
 
 from germination_pipeline import load_model, analyze_image
 
-# ── Page Config ───────────────────────────────────────────────────
 st.set_page_config(
     page_title="Sugarcane Germination Analyzer",
     page_icon="🌱",
     layout="wide"
 )
 
-# ── Model Loading — once per session ──────────────────────────────
 @st.cache_resource
 def get_model():
-    """Load SVM model once and cache for the session."""
     try:
         return load_model()
     except FileNotFoundError as e:
         st.error(f"Model not found: {e}")
         st.stop()
 
-
-# ── UI ────────────────────────────────────────────────────────────
 st.title("🌱 Sugarcane Germination Analyzer")
 st.markdown(
     "Upload one or more petri dish images to estimate total seed count, "
@@ -42,7 +37,6 @@ uploaded_files = st.file_uploader(
 if uploaded_files:
     svm, scaler = get_model()
 
-    # Only rerun analysis if uploaded files have changed
     uploaded_names = [f.name for f in uploaded_files]
     if "last_uploaded" not in st.session_state or \
        st.session_state.last_uploaded != uploaded_names:
@@ -82,10 +76,10 @@ if uploaded_files:
     results = st.session_state.get("results", [])
 
     if results:
-        # ── Results table ─────────────────────────────────────────
         st.subheader("Results")
 
         df = pd.DataFrame([{
+            "Petri ID"             : r["petri_id"],
             "Image"                : r["image_name"],
             "Total Seeds"          : r["total_seeds"],
             "Germinated Seeds"     : r["germinated_seeds"],
@@ -94,7 +88,6 @@ if uploaded_files:
 
         st.dataframe(df, use_container_width=True, hide_index=True)
 
-        # ── Summary stats ─────────────────────────────────────────
         if len(results) > 1:
             st.divider()
             col1, col2, col3 = st.columns(3)
@@ -105,7 +98,6 @@ if uploaded_files:
                         f"{df['Germination Rate (%)'].min():.1f}% – "
                         f"{df['Germination Rate (%)'].max():.1f}%")
 
-        # ── Annotated image viewer ────────────────────────────────
         st.divider()
         st.subheader("Annotated Image")
         st.caption(
@@ -126,20 +118,15 @@ if uploaded_files:
 
         selected_result = next(r for r in results if r["image_name"] == selected)
         caption = (
+            f"Petri ID: {selected_result['petri_id']}  |  "
             f"{selected_result['image_name']} — "
             f"Total: {selected_result['total_seeds']}  |  "
             f"Germinated: {selected_result['germinated_seeds']}  |  "
             f"Rate: {selected_result['germination_rate']}%"
         )
 
-        # Thumbnail view (default)
-        st.image(
-            selected_result["annotated_img"],
-            caption=caption,
-            width=600
-        )
+        st.image(selected_result["annotated_img"], caption=caption, width=600)
 
-        # Full resolution expander for detailed inspection
         with st.expander("🔍 Expand for full resolution inspection"):
             st.image(
                 selected_result["annotated_img"],
@@ -147,7 +134,6 @@ if uploaded_files:
                 use_container_width=True
             )
 
-        # ── CSV download ──────────────────────────────────────────
         st.divider()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         csv = df.to_csv(index=False)

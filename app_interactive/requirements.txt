@@ -1,6 +1,8 @@
 flask
 opencv-python
 numpy
-scikit-learn
+scikit-learn==1.8.0
 scikit-image
 joblib
+zxing-cpp
+pillow

@@ -3,7 +3,7 @@ germination_pipeline.py
 -----------------------
 Self-contained pipeline for sugarcane seed germination rate estimation.
 Uses HSV segmentation, watershed separation, SVM germination classification,
-and contour-based seed counting.
+and contour-based seed counting. Includes QR code reading for petri dish ID.
 
 All functions are consolidated from the research codebase — only code
 that executes in production is included.
@@ -29,6 +29,61 @@ CONTOUR_MERGE_THRESHOLD = 900
 LOWER_GREEN = np.array([25, 15, 30])
 UPPER_GREEN = np.array([90, 255, 255])
 
+
+# ── QR Code Reading ───────────────────────────────────────────────
+def read_qr_code(img_path):
+    """
+    Attempt to decode a QR code from the full original image.
+    Tries multiple scales and rotations, with zxingcpp as primary
+    detector and OpenCV as fallback.
+    """
+    import PIL.Image
+    import zxingcpp
+
+    scales    = [1.0, 0.5, 0.25, 0.1]
+    rotations = [0, 90, 180, 270]
+
+    try:
+        pil_img = PIL.Image.open(str(img_path))
+
+        for scale in scales:
+            w = int(pil_img.width  * scale)
+            h = int(pil_img.height * scale)
+            resized = pil_img.resize((w, h))
+
+            for angle in rotations:
+                rotated = resized.rotate(angle, expand=True)
+                results = zxingcpp.read_barcodes(rotated)
+                for r in results:
+                    if r.text:
+                        return r.text.strip()
+    except Exception:
+        pass
+
+    # Fallback: OpenCV multi-scale
+    img = cv2.imread(str(img_path))
+    if img is None:
+        return "Unknown"
+
+    detector = cv2.QRCodeDetector()
+    h, w = img.shape[:2]
+
+    for scale in scales:
+        resized = cv2.resize(img, (int(w * scale), int(h * scale)))
+        data, _, _ = detector.detectAndDecode(resized)
+        if data:
+            return data.strip()
+
+        gray     = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+        clahe    = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        data, _, _ = detector.detectAndDecode(
+            cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+        )
+        if data:
+            return data.strip()
+
+    return "Unknown"
 
 # ── Preprocessing ─────────────────────────────────────────────────
 def crop_to_dish(img_path, working_size=1000):
@@ -133,25 +188,17 @@ def watershed_separate(img, cleaned_mask):
 
 # ── Text Drawing Helper ───────────────────────────────────────────
 def draw_label(img, text, x, y, text_color, bg_color):
-    """
-    Draw text with a filled background rectangle for visibility.
-    Prevents labels from being lost against similarly-colored backgrounds.
-    """
+    """Draw text with a filled background rectangle for visibility."""
     font       = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.5
     thickness  = 1
     padding    = 2
 
-    (text_w, text_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+    (text_w, text_h), _ = cv2.getTextSize(text, font, font_scale, thickness)
     rect_x1 = x
-    rect_y1 = y - text_h - padding * 2
-    rect_x2 = x + text_w + padding * 2
+    rect_y1 = max(y - text_h - padding * 2, 0)
+    rect_x2 = min(x + text_w + padding * 2, img.shape[1])
     rect_y2 = y
-
-    # Clamp to image bounds
-    h, w = img.shape[:2]
-    rect_y1 = max(rect_y1, 0)
-    rect_x2 = min(rect_x2, w)
 
     cv2.rectangle(img, (rect_x1, rect_y1), (rect_x2, rect_y2), bg_color, -1)
     cv2.putText(img, text, (x + padding, y - padding),
@@ -215,13 +262,10 @@ def load_model(model_dir="models"):
 # ── Combined Annotation + Count + Classify ────────────────────────
 def annotate_and_count(img, watershed_mask, svm, scaler):
     """
-    In a single pass over the watershed regions:
+    In a single pass:
       - Count seeds (contour-based with merge estimation)
-      - Classify each region as germinated or not (SVM)
-      - Draw all annotations onto one image:
-            Orange box  — single ungerminated seed
-            Red box     — merged cluster with ~N count label (white text, dark bg)
-            Green box   — germinated seed (overlaid on orange/red box)
+      - Classify germination (SVM)
+      - Draw all annotations onto one image
 
     Returns:
         annotated    — RGB image with all boxes drawn
@@ -232,7 +276,7 @@ def annotate_and_count(img, watershed_mask, svm, scaler):
     total_seeds = 0
     germinated  = 0
 
-    # ── Contour pass: seed counting and base boxes ────────────────
+    # Contour pass — seed counting and base boxes
     contours, _ = cv2.findContours(
         watershed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
@@ -254,7 +298,7 @@ def annotate_and_count(img, watershed_mask, svm, scaler):
             cv2.rectangle(annotated, (x, y), (x + w, y + h), (255, 165, 0), 2)
             total_seeds += 1
 
-    # ── SVM pass: germination classification + green overlay ──────
+    # SVM pass — germination classification + green overlay
     labeled = label(watershed_mask)
     regions = regionprops(labeled)
 
@@ -294,12 +338,16 @@ def analyze_image(img_path, original_filename, svm, scaler):
 
     Returns:
         dict with keys:
-            image_name       — original filename (not temp path)
+            petri_id         — decoded QR code string, or "Unknown"
+            image_name       — original filename
             total_seeds      — estimated total seed count
             germinated_seeds — estimated germinated seed count
             germination_rate — germination rate as percentage (1dp)
             annotated_img    — RGB numpy array with full annotation overlay
     """
+    # Read QR code from original image before any cropping
+    petri_id = read_qr_code(img_path)
+
     img         = preprocess(img_path)
     combined, _ = hsv_segment(img)
     cleaned     = clean_mask(combined)
@@ -310,6 +358,7 @@ def analyze_image(img_path, original_filename, svm, scaler):
     rate = round(germinated / total * 100, 1) if total > 0 else 0.0
 
     return {
+        "petri_id"         : petri_id,
         "image_name"       : original_filename,
         "total_seeds"      : total,
         "germinated_seeds" : germinated,
